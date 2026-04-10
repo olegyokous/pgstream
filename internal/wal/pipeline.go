@@ -71,3 +71,17 @@ func (p *Pipeline) Process(ctx context.Context, data []byte, lsn uint64) error {
 	}
 	return nil
 }
+
+// Flush flushes any buffered checkpoint progress to the upstream replication
+// slot. It is a no-op when no CheckpointManager is configured. Callers should
+// invoke Flush periodically (e.g. on a ticker) to ensure the replication
+// cursor advances even during low-traffic periods.
+func (p *Pipeline) Flush(ctx context.Context) error {
+	if p.checkpoint == nil {
+		return nil
+	}
+	if err := p.checkpoint.Flush(ctx); err != nil {
+		return fmt.Errorf("checkpoint flush: %w", err)
+	}
+	return nil
+}
