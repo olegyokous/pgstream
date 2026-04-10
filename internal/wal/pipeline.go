@@ -6,67 +6,68 @@ import (
 	"io"
 )
 
-// Pipeline wires together a filter and formatter to process WAL messages.
+// Pipeline wires together decoding, filtering, formatting, and writing of WAL
+// messages. An optional CheckpointManager can be supplied so that each
+// successfully written message advances the replication cursor.
 type Pipeline struct {
-	filter    *Filter
-	formatter Formatter
-	writer    io.Writer
+	decoder    *Decoder
+	filter     *Filter
+	formatter  Formatter
+	writer     io.Writer
+	checkpoint *CheckpointManager
 }
 
-// Formatter is the interface implemented by all output formatters.
-type Formatter interface {
-	Format(msg Message) ([]byte, error)
+// PipelineOption is a functional option for Pipeline.
+type PipelineOption func(*Pipeline)
+
+// WithCheckpoint attaches a CheckpointManager to the pipeline.
+func WithCheckpoint(cm *CheckpointManager) PipelineOption {
+	return func(p *Pipeline) {
+		p.checkpoint = cm
+	}
 }
 
-// PipelineConfig holds the configuration for a Pipeline.
-type PipelineConfig struct {
-	Filter    FilterConfig
-	Format    string
-	Writer    io.Writer
+// NewPipeline constructs a Pipeline from its components.
+func NewPipeline(dec *Decoder, f *Filter, fmt Formatter, w io.Writer, opts ...PipelineOption) *Pipeline {
+	p := &Pipeline{
+		decoder:   dec,
+		filter:    f,
+		formatter: fmt,
+		writer:    w,
+	}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
 }
 
-// FilterConfig carries filter constraints.
-type FilterConfig struct {
-	Tables  []string
-	Actions []string
-}
-
-// NewPipeline constructs a Pipeline from config.
-func NewPipeline(cfg PipelineConfig) (*Pipeline, error) {
-	filter := NewFilter(cfg.Filter.Tables, cfg.Filter.Actions)
-
-	formatter, err := NewFormatter(cfg.Format)
+// Process decodes raw WAL data, applies the filter, formats the result, and
+// writes it to the configured writer. lsn is the log-sequence number of the
+// message; it is forwarded to the CheckpointManager when present.
+func (p *Pipeline) Process(ctx context.Context, data []byte, lsn uint64) error {
+	msg, err := p.decoder.Decode(data)
 	if err != nil {
-		return nil, fmt.Errorf("pipeline: %w", err)
+		return fmt.Errorf("decode: %w", err)
+	}
+	if msg == nil {
+		return nil
 	}
 
-	return &Pipeline{
-		filter:    filter,
-		formatter: formatter,
-		writer:    cfg.Writer,
-	}, nil
-}
-
-// Run reads messages from in, filters and formats them, writing to the pipeline writer.
-func (p *Pipeline) Run(ctx context.Context, in <-chan Message) error {
-	for {
-		select {
-		case msg, ok := <-in:
-			if !ok {
-				return nil
-			}
-			if !p.filter.Match(msg) {
-				continue
-			}
-			data, err := p.formatter.Format(msg)
-			if err != nil {
-				return fmt.Errorf("pipeline: format: %w", err)
-			}
-			if _, err := p.writer.Write(append(data, '\n')); err != nil {
-				return fmt.Errorf("pipeline: write: %w", err)
-			}
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	if !p.filter.Match(msg) {
+		return nil
 	}
+
+	out, err := p.formatter.Format(msg)
+	if err != nil {
+		return fmt.Errorf("format: %w", err)
+	}
+
+	if _, err := fmt.Fprintln(p.writer, string(out)); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+
+	if p.checkpoint != nil {
+		p.checkpoint.Track(lsn)
+	}
+	return nil
 }
