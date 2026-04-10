@@ -6,34 +6,48 @@ import (
 	"io"
 )
 
-// Pipeline wires together decoding, filtering, formatting, and writing of WAL
-// messages. An optional CheckpointManager can be supplied so that each
-// successfully written message advances the replication cursor.
+// Pipeline wires together a Listener, Decoder, Filter, Transformer, and
+// Formatter, writing formatted output to a writer.
 type Pipeline struct {
-	decoder    *Decoder
-	filter     *Filter
-	formatter  Formatter
-	writer     io.Writer
-	checkpoint *CheckpointManager
+	listener    *Listener
+	decoder     *Decoder
+	filter      *Filter
+	transformer *Transformer
+	formatter   Formatter
+	out         io.Writer
+	checkpoint  *CheckpointManager
 }
 
 // PipelineOption is a functional option for Pipeline.
 type PipelineOption func(*Pipeline)
 
-// WithCheckpoint attaches a CheckpointManager to the pipeline.
+// WithCheckpoint attaches a CheckpointManager to the pipeline so that
+// successfully processed LSNs are acknowledged back to Postgres.
 func WithCheckpoint(cm *CheckpointManager) PipelineOption {
-	return func(p *Pipeline) {
-		p.checkpoint = cm
-	}
+	return func(p *Pipeline) { p.checkpoint = cm }
 }
 
-// NewPipeline constructs a Pipeline from its components.
-func NewPipeline(dec *Decoder, f *Filter, fmt Formatter, w io.Writer, opts ...PipelineOption) *Pipeline {
+// WithTransformer attaches a Transformer to the pipeline.
+func WithTransformer(tr *Transformer) PipelineOption {
+	return func(p *Pipeline) { p.transformer = tr }
+}
+
+// NewPipeline constructs a Pipeline from its required components and any
+// optional overrides supplied via PipelineOption.
+func NewPipeline(
+	l *Listener,
+	d *Decoder,
+	f *Filter,
+	fmt Formatter,
+	out io.Writer,
+	opts ...PipelineOption,
+) *Pipeline {
 	p := &Pipeline{
-		decoder:   dec,
+		listener:  l,
+		decoder:   d,
 		filter:    f,
 		formatter: fmt,
-		writer:    w,
+		out:       out,
 	}
 	for _, o := range opts {
 		o(p)
@@ -41,47 +55,38 @@ func NewPipeline(dec *Decoder, f *Filter, fmt Formatter, w io.Writer, opts ...Pi
 	return p
 }
 
-// Process decodes raw WAL data, applies the filter, formats the result, and
-// writes it to the configured writer. lsn is the log-sequence number of the
-// message; it is forwarded to the CheckpointManager when present.
-func (p *Pipeline) Process(ctx context.Context, data []byte, lsn uint64) error {
-	msg, err := p.decoder.Decode(data)
-	if err != nil {
-		return fmt.Errorf("decode: %w", err)
-	}
-	if msg == nil {
+// Run starts the pipeline. It blocks until ctx is cancelled or a fatal error
+// occurs. Filtered-out or nil-transformed messages are silently skipped.
+func (p *Pipeline) Run(ctx context.Context) error {
+	return p.listener.Listen(ctx, func(raw []byte, lsn uint64) error {
+		msg, err := p.decoder.Decode(raw)
+		if err != nil || msg == nil {
+			return nil // skip non-data messages
+		}
+
+		if !p.filter.Match(msg) {
+			return nil
+		}
+
+		if p.transformer != nil {
+			msg = p.transformer.Apply(msg)
+			if msg == nil {
+				return nil
+			}
+		}
+
+		line, err := p.formatter.Format(msg)
+		if err != nil {
+			return fmt.Errorf("format: %w", err)
+		}
+
+		if _, err := fmt.Fprintln(p.out, line); err != nil {
+			return fmt.Errorf("write: %w", err)
+		}
+
+		if p.checkpoint != nil {
+			p.checkpoint.Track(lsn)
+		}
 		return nil
-	}
-
-	if !p.filter.Match(msg) {
-		return nil
-	}
-
-	out, err := p.formatter.Format(msg)
-	if err != nil {
-		return fmt.Errorf("format: %w", err)
-	}
-
-	if _, err := fmt.Fprintln(p.writer, string(out)); err != nil {
-		return fmt.Errorf("write: %w", err)
-	}
-
-	if p.checkpoint != nil {
-		p.checkpoint.Track(lsn)
-	}
-	return nil
-}
-
-// Flush flushes any buffered checkpoint progress to the upstream replication
-// slot. It is a no-op when no CheckpointManager is configured. Callers should
-// invoke Flush periodically (e.g. on a ticker) to ensure the replication
-// cursor advances even during low-traffic periods.
-func (p *Pipeline) Flush(ctx context.Context) error {
-	if p.checkpoint == nil {
-		return nil
-	}
-	if err := p.checkpoint.Flush(ctx); err != nil {
-		return fmt.Errorf("checkpoint flush: %w", err)
-	}
-	return nil
+	})
 }
