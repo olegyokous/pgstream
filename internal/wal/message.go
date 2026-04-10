@@ -6,9 +6,9 @@ import "time"
 type ActionType string
 
 const (
-	ActionInsert ActionType = "INSERT"
-	ActionUpdate ActionType = "UPDATE"
-	ActionDelete ActionType = "DELETE"
+	ActionInsert   ActionType = "INSERT"
+	ActionUpdate   ActionType = "UPDATE"
+	ActionDelete   ActionType = "DELETE"
 	ActionTruncate ActionType = "TRUNCATE"
 )
 
@@ -28,6 +28,27 @@ type Message struct {
 	Table     string     `json:"table"`
 	Columns   []Column   `json:"columns,omitempty"`
 	OldKeys   []Column   `json:"old_keys,omitempty"`
+}
+
+// IsDataChange reports whether the message represents a data modification
+// (INSERT, UPDATE, or DELETE), as opposed to a structural change like TRUNCATE.
+func (m *Message) IsDataChange() bool {
+	switch m.Action {
+	case ActionInsert, ActionUpdate, ActionDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+// GetColumn returns the column with the given name, or false if not found.
+func (m *Message) GetColumn(name string) (Column, bool) {
+	for _, col := range m.Columns {
+		if col.Name == name {
+			return col, true
+		}
+	}
+	return Column{}, false
 }
 
 // Relation holds metadata about a PostgreSQL table.
