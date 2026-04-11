@@ -23,17 +23,19 @@ func HealthHandler(m *Metrics) http.HandlerFunc {
 		snap := m.Snapshot()
 
 		status := HealthStatus{
-			Status:   "ok",
-			Uptime:   snap.Uptime.Round(time.Second).String(),
-			Messages: snap.MessagesProcessed,
-			Errors:   snap.Errors,
-			Filtered: snap.MessagesFiltered,
+			Status:    "ok",
+			Uptime:    snap.Uptime.Round(time.Second).String(),
+			Messages:  snap.MessagesProcessed,
+			Errors:    snap.Errors,
+			Filtered:  snap.MessagesFiltered,
 			Timestamp: time.Now().UTC(),
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		_ = json.NewEncoder(w).Encode(status)
+		if err := json.NewEncoder(w).Encode(status); err != nil {
+			http.Error(w, "failed to encode health status", http.StatusInternalServerError)
+		}
 	}
 }
 
