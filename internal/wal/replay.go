@@ -105,3 +105,21 @@ func (r *ReplayBuffer) Reset() {
 	defer r.mu.Unlock()
 	r.entries = r.entries[:0]
 }
+
+// Evict removes all messages that have exceeded the configured TTL.
+// It returns the number of messages evicted. This can be called periodically
+// to reclaim memory without discarding still-valid entries.
+func (r *ReplayBuffer) Evict() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := r.clock()
+	origLen := len(r.entries)
+	valid := r.entries[:0]
+	for _, e := range r.entries {
+		if now.Sub(e.recordedAt) <= r.cfg.TTL {
+			valid = append(valid, e)
+		}
+	}
+	r.entries = valid
+	return origLen - len(r.entries)
+}
