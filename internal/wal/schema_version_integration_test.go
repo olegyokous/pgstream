@@ -52,3 +52,28 @@ func TestSchemaVersion_DetectsSchemaEvolution(t *testing.T) {
 		}
 	}
 }
+
+// TestSchemaVersion_ReobservingSameSchemaDoesNotIncrement verifies that
+// observing an identical relation twice does not bump the version.
+func TestSchemaVersion_ReobservingSameSchemaDoesNotIncrement(t *testing.T) {
+	sv := wal.NewSchemaVersion()
+	rel := wal.Relation{
+		ID:        7,
+		Namespace: "public",
+		Name:      "users",
+		Columns:   []wal.Column{{Name: "id", DataType: 23}, {Name: "email", DataType: 25}},
+	}
+
+	v1, changed1 := sv.Observe(rel)
+	if !changed1 {
+		t.Fatal("first observe: expected changed=true")
+	}
+
+	v2, changed2 := sv.Observe(rel)
+	if changed2 {
+		t.Fatal("second observe of identical schema: expected changed=false")
+	}
+	if v2 != v1 {
+		t.Fatalf("expected version to remain %d after re-observe, got %d", v1, v2)
+	}
+}
