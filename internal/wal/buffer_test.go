@@ -77,6 +77,24 @@ func TestMessageBuffer_Drain(t *testing.T) {
 	}
 }
 
+func TestMessageBuffer_DrainPreservesOrder(t *testing.T) {
+	b, _ := NewMessageBuffer(BufferConfig{Capacity: 4})
+	msgs := []*Message{
+		bufMsg("INSERT", "a"),
+		bufMsg("UPDATE", "b"),
+		bufMsg("DELETE", "c"),
+	}
+	for _, m := range msgs {
+		_ = b.Push(m)
+	}
+	out := b.Drain()
+	for i, m := range msgs {
+		if out[i] != m {
+			t.Errorf("message order mismatch at index %d: got %v, want %v", i, out[i], m)
+		}
+	}
+}
+
 func TestMessageBuffer_DefaultConfig(t *testing.T) {
 	cfg := DefaultBufferConfig()
 	if cfg.Capacity <= 0 {
