@@ -8,6 +8,8 @@ import (
 	"pgstream/internal/wal"
 )
 
+// TestCheckpointManager_IntegratesWithPipeline verifies that the checkpoint
+// manager flushes the highest tracked LSN after the flush interval elapses.
 func TestCheckpointManager_IntegratesWithPipeline(t *testing.T) {
 	var flushed uint64
 
@@ -38,6 +40,9 @@ func TestCheckpointManager_IntegratesWithPipeline(t *testing.T) {
 	}
 }
 
+// TestCheckpointManager_OnlyFlushesHighestLSN verifies that out-of-order
+// tracked LSNs never cause the manager to flush a value higher than the
+// true maximum that was tracked.
 func TestCheckpointManager_OnlyFlushesHighestLSN(t *testing.T) {
 	flushes := []uint64{}
 
@@ -72,5 +77,34 @@ func TestCheckpointManager_OnlyFlushesHighestLSN(t *testing.T) {
 		if v > 30 {
 			t.Fatalf("flushed LSN %d exceeds highest tracked value 30", v)
 		}
+	}
+}
+
+// TestCheckpointManager_NoFlushWithoutTrackedLSN verifies that the manager
+// does not invoke the flush callback when no LSNs have been tracked.
+func TestCheckpointManager_NoFlushWithoutTrackedLSN(t *testing.T) {
+	flushCalled := false
+
+	cfg := wal.DefaultCheckpointConfig()
+	cfg.FlushInterval = 15 * time.Millisecond
+
+	cm := wal.NewCheckpointManager(cfg, func(lsn uint64) error {
+		flushCalled = true
+		return nil
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		cm.Run(ctx)
+		close(done)
+	}()
+
+	<-done
+
+	if flushCalled {
+		t.Fatal("expected no flush when no LSNs were tracked")
 	}
 }
