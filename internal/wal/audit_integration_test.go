@@ -60,6 +60,29 @@ func TestAuditor_MultipleTablesSelective(t *testing.T) {
 	}
 }
 
+// TestAuditor_EmptyTableFilter verifies that when no table filter is configured,
+// all messages are recorded regardless of their table name.
+func TestAuditor_EmptyTableFilter(t *testing.T) {
+	var buf bytes.Buffer
+	a := NewAuditor(AuditConfig{Writer: &buf})
+
+	msgs := []*Message{
+		auditMsg("orders", "INSERT", "0/1"),
+		auditMsg("payments", "UPDATE", "0/2"),
+		auditMsg("users", "DELETE", "0/3"),
+	}
+	for _, m := range msgs {
+		if err := a.Record(m); err != nil {
+			t.Fatalf("unexpected error recording message: %v", err)
+		}
+	}
+
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	if len(lines) != len(msgs) {
+		t.Errorf("expected %d audit lines, got %d: %s", len(msgs), len(lines), buf.String())
+	}
+}
+
 // safeBuffer is a thread-safe bytes.Buffer.
 type safeBuffer struct {
 	mu  sync.Mutex
