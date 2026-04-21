@@ -1,6 +1,9 @@
 package wal
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Flattener collapses a WAL message's columns into a single string map,
 // optionally prefixing each key with the table name.
@@ -18,7 +21,7 @@ func WithFlattenPrefix() FlattenOption {
 }
 
 // WithFlattenSeparator sets the separator used between table name and column
-// when prefix mode is enabled. Defaults to ".".
+// when prefix mode is enabled. Defaults to "."
 func WithFlattenSeparator(sep string) FlattenOption {
 	return func(f *Flattener) { f.separator = sep }
 }
@@ -35,9 +38,9 @@ func NewFlattener(opts ...FlattenOption) *Flattener {
 // Flatten converts the columns of msg into a flat map[string]string.
 // Nil messages return a nil map. Nil column values are represented as empty
 // strings.
-func (f *Flattener) Flatten(msg *Message) map[string]string {
+func (f *Flattener) Flatten(msg *Message) (map[string]string, error) {
 	if msg == nil {
-		return nil
+		return nil, nil
 	}
 	out := make(map[string]string, len(msg.Columns))
 	for _, col := range msg.Columns {
@@ -47,9 +50,13 @@ func (f *Flattener) Flatten(msg *Message) map[string]string {
 		}
 		val := ""
 		if col.Value != nil {
-			val = col.Value.(string)
+			s, ok := col.Value.(string)
+			if !ok {
+				return nil, fmt.Errorf("flatten: column %q value has unexpected type %T", col.Name, col.Value)
+			}
+			val = s
 		}
 		out[key] = val
 	}
-	return out
+	return out, nil
 }
