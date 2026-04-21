@@ -61,3 +61,12 @@ func (a *Aligner) LastLSN(table string) (uint64, bool) {
 	v, ok := a.lastLSN[table]
 	return v, ok
 }
+
+// Tables returns a list of all table names currently tracked by the Aligner.
+func (a *Aligner) Tables() []string {
+	tables := make([]string, 0, len(a.lastLSN))
+	for t := range a.lastLSN {
+		tables = append(tables, t)
+	}
+	return tables
+}
